@@ -7,6 +7,5 @@ echo "// Number of samples: $NSAMPLES"
 
 for i in `seq 0 $NSAMPLES` 
 	do 
-		echo "\"   in r16, %1\n   st z+, r16   \n\" // sample $i "
-		#echo "\"   in r16, %1\n   sbi 0x5, 4\ncbi 0x5, 4  \n\" // sample $i "
+		echo "\"   in r16, %2\n   st z+, r16   \n\" // sample $i "
 done

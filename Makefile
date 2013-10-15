@@ -26,6 +26,12 @@ all: $(HEXFILE)
 # characters are not always preserved on Windows. To ensure WinAVR
 # compatibility define the file type manually.
 
+rxcode.asm: generate_rxcode.sh
+	generate_rxcode.sh > rxcode.asm
+
+maplebus.o: maplebus.c rxcode.asm
+	$(CC) $(CFLAGS) -c $< -o $@
+
 .c.s:
 	$(CC) $(CFLAGS) -S $< -o $@
 

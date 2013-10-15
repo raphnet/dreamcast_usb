@@ -10,6 +10,7 @@
 
 void maple_init(void)
 {
+	DDRC &= ~0x03;
 }
 
 #define MAPLE_BUF_SIZE	640
@@ -117,23 +118,7 @@ static int maplebus_decode(unsigned char *data, unsigned int maxlen)
 		last_fell = fell;
 		last = cur;
 	}
-
 	
-#if 0
-	for (i=0; i<dst_pos; i++) {
-		int j;
-		for (j=0; j<8; j++) {
-			if (data[i] & (0x80 >> j)) {
-				PORTB |= 0x10;
-			} else {
-				PORTB &= ~0x10;
-			}
-			_delay_us(5);
-		}
-	}
-	PORTB &= ~0x10;
-#endif
-
 	return dst_pos;
 }
 
@@ -146,6 +131,7 @@ int maple_receivePacket(unsigned char *data, unsigned int maxlen)
 {
 	unsigned char *tmp = maplebuf;
 	unsigned char lrc;
+	unsigned char timeout;
 	int res, i;
 	
 	//
@@ -160,33 +146,47 @@ int maple_receivePacket(unsigned char *data, unsigned int maxlen)
 	asm volatile( 
 			"	push r30		\n" // 2
 			"	push r31		\n"	// 2
+			"	clr %1			\n" // 1 (result=0, no timeout)
 		
-//			"	sbi 0x5, 4		\n" // PB4
-//			"	cbi 0x5, 4		\n"
+			"	sbi 0x5, 4		\n" // PB4
+			"	cbi 0x5, 4		\n"
 
 			// Loop until a change is detected.	
-			"	in r17, %1		\n"
+			"	ldi r18, 255	\n"
+			"	in r17, %2		\n"
 			"wait_start:		\n"
-			"	in r16, %1		\n"
+			"	dec r18			\n"
+			"	breq timeout	\n"
+			"	in r16, %2		\n"
 			"	cp r16, r17		\n"
 			"	breq wait_start	\n"
+			"	rjmp start_rx	\n"
 
+"timeout:\n"
+			"	inc %1			\n" // 1 for timeout
+			"	sbi 0x5, 4		\n" // PB4
+			"	cbi 0x5, 4		\n"
+			"	jmp done		\n"
+
+"start_rx:			\n"
 			"	sbi 0x5, 4		\n" // PB4
 			"	cbi 0x5, 4		\n"
 
 			// We will loose the first bit(s), but
 			// it's only the start of frame.
-
-			"start_rx:			\n"
 			#include "rxcode.asm"			
 
+"done:\n"
 			"	sbi 0x5, 4		\n" // PB4
 			"	cbi 0x5, 4		\n"
 			"	pop r31			\n" // 2
 			"	pop r30			\n" // 2
-		: "=z"(tmp)
+		: "=z"(tmp), "=r"(timeout)
 		: "I" (_SFR_IO_ADDR(PINC))
-		: "r16","r17") ;
+		: "r16","r17","r18") ;
+
+	if (timeout)
+		return -1;
 
 	res = maplebus_decode(data, maxlen);
 	if (res<=0)
@@ -202,6 +202,19 @@ int maple_receivePacket(unsigned char *data, unsigned int maxlen)
 	}
 	if (lrc)
 		return -2; // LRC error
+
+	/* Reverse each group of 4 bytes */
+	for (i=0; i<(res-1); i+=4) {
+		unsigned char tmp;
+
+		tmp = data[i+3];
+		data[i+3] = data[i];
+		data[i] = tmp;
+
+		tmp = data[i+2];
+		data[i+2] = data[i+1];
+		data[i+1] = tmp;
+	}
 
 	return res-1; // remove lrc
 }
@@ -247,36 +260,14 @@ void maple_sendPacket(unsigned char *data, unsigned char len)
 		"ld r16, z+		\n"
 
 		// Sync
-		SET_1 SET_5
-		DLY_8
-		CLR_1 
-		DLY_8
+		SET_1 SET_5 DLY_8 CLR_1 DLY_8
 
-		CLR_5 	
-		DLY_8
-		SET_5
-		DLY_8
-
-		CLR_5
-		DLY_8
-		SET_5
-		DLY_8
-
-		CLR_5
-		DLY_8
-		SET_5
-		DLY_8
-
-		CLR_5
-		DLY_8
-		SET_5
-		DLY_8
-
-		SET_1
-		CLR_5
+		CLR_5 DLY_8 SET_5 DLY_8 CLR_5
+		DLY_8 SET_5 DLY_8 CLR_5 DLY_8
+		SET_5 DLY_8 CLR_5 DLY_8 SET_5
+		DLY_8 SET_1 CLR_5
 
 		// Pin 5 is low, Pin 1 is high. Ready for 1st phase
-
 		// Note: Coded for 16Mhz (8 cycles = 500ns)
 "next_byte:\n"
 
@@ -284,7 +275,7 @@ void maple_sendPacket(unsigned char *data, unsigned char len)
 		"out %0, r16	\n" // 1  data
 		"cbi %0, 0		\n" // 1  falling edge on pin 1
 		"ld r16, z+		\n" // 2  load phase 2 data
-		"dec r19		\n" // 1  Decrement counter for brne below
+		"nop			\n" // 1
 		"nop			\n" // 1
 		"nop			\n" // 1
 		
@@ -292,10 +283,8 @@ void maple_sendPacket(unsigned char *data, unsigned char len)
 		"out %0, r16	\n" // 1  data
 		"cbi %0, 1		\n" // 1  falling edge on pin 5
 		"ld r16, z+		\n" // 2
-		"nop			\n" // 1
+		"dec r19		\n" // 1  Decrement counter for brne below
 		"brne next_byte	\n" // 2
-
-"done:\n"
 
 		// End of transmission
 		SET_5 DLY_4 CLR_5 DLY_4
@@ -310,6 +299,7 @@ void maple_sendPacket(unsigned char *data, unsigned char len)
 		: "r1","r16","r17","r18","r19","r20","r21"
 	);
 
+	// back to input to receive the answer
 	DDRC &= ~0x03;
 }
 

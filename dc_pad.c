@@ -89,8 +89,6 @@ const unsigned char dcPadDevDesc[] PROGMEM = {    /* USB device descriptor */
     1, /* number of configurations */
 };
 
-static uint32_t request_device_info[1] = { 0x01200000 };
-static uint32_t get_condition[2] = { 0x09200001, 0x00000001 };
 
 static void dcInit(void)
 {
@@ -102,39 +100,98 @@ static void dcInit(void)
 	dcGamepad.deviceDescriptor = (void*)dcPadDevDesc;
 	dcGamepad.deviceDescriptorSize = sizeof(dcPadDevDesc);
 	
-	maple_sendFrame(request_device_info, 1);
 }
+
+#define MAX_ERRORS 10
+
+#define STATE_GET_INFO	0
+#define STATE_WRITE_LCD	1
+#define STATE_READ_PAD	2
+
+#define MAPLE_CMD_RQ_DEV_INFO	1
+#define MAPLE_CMD_RESET_DEVICE	3
+#define MAPLE_CMD_GET_CONDITION	9
+#define MAPLE_CMD_BLOCK_WRITE	12
+
+#define MAPLE_ADDR_PORT(id)		((id)<<6)
+#define MAPLE_ADDR_PORTA		MAPLE_ADDR_PORT(0)
+#define MAPLE_ADDR_PORTB		MAPLE_ADDR_PORT(1)
+#define MAPLE_ADDR_PORTC		MAPLE_ADDR_PORT(2)
+#define MAPLE_ADDR_PORTD		MAPLE_ADDR_PORT(3)
+#define MAPLE_ADDR_MAIN			0x20
+#define MAPLE_ADDR_SUB(id)		((1)<<id) /* where id is 0 to 4 */
+
+#define MAPLE_DC_ADDR	0
+#define MAPLE_HEADER(cmd,dst_addr,src_addr,len)	( (((cmd)&0xfful)<<24) | (((dst_addr)&0xfful)<<16) | (((src_addr)&0xfful)<<8) | ((len)&0xff))
+
+static uint32_t request_device_info[1] = { MAPLE_HEADER(MAPLE_CMD_RQ_DEV_INFO, MAPLE_ADDR_MAIN | MAPLE_ADDR_PORTA, MAPLE_DC_ADDR, 0) };
+static uint32_t get_condition[2] = { 0x09200001, 0x00000001 };
+static uint32_t block_write_lcd[4] = { 0x0c300003, 0x004, 0,  0xf0f0f0f0 };
 
 static void dcReadPad(void)
 {
+	static unsigned char state = STATE_GET_INFO;
+	static unsigned char err_count = 0;
+	static unsigned char controller_address = 0;
 	unsigned char tmp[30];
-	static unsigned char a;
 	int v;
-	unsigned char lrc = 0;
-	int i;
+
+	switch (state)
+	{
+		case STATE_GET_INFO:
+			maple_sendFrame(request_device_info, 1);
+			v = maple_receivePacket(tmp, 30);
+			_delay_ms(2);
+			if (v==-2) {
+				controller_address = tmp[1]; // sender address
+				state = STATE_WRITE_LCD;
+			}
+			break;
+
+		case STATE_WRITE_LCD:
+			{
+				int i;
+
+				for (i=0; i<5; i++)
+				{
+					uint32_t request_device_info1[1] = { MAPLE_HEADER(MAPLE_CMD_RQ_DEV_INFO, MAPLE_ADDR_PORTA | MAPLE_ADDR_SUB(i), MAPLE_DC_ADDR, 0) };
+
+					if (controller_address & (1<<i)) {
+						maple_sendFrame(request_device_info1, 1);
+						_delay_us(300);
+					}
+
+				}
+
+			}
+			break;
+
+		case STATE_READ_PAD:
+			maple_sendFrame(get_condition, 2);
+			v = maple_receivePacket(tmp, 30);
+			if (v<=0) {
+				err_count++;
+				if (err_count > MAX_ERRORS)
+					state = STATE_GET_INFO;
+				return;
+			}
+			err_count = 0;
 	
-again:
-
-	maple_sendFrame(get_condition, 2);
-	v = maple_receivePacket(tmp, 30);
-
-	if (v<0)
-		return;
 	
-	// 8 : Left trigger
-	// 9 : Right trigger
-	// 10 : Buttons
-	// 11 : Buttons
-	// 12 : Joy Y 2
-	// 13 : Joy X 2
-	// 14 : Y axis
-	// 15 : X axis
-	//
-
-	last_built_report[0][0] = tmp[15]-1;
-	last_built_report[0][1] = tmp[14]-1;
-	last_built_report[0][2] = tmp[10] ^ 0xff;
-	last_built_report[0][3] = tmp[11] ^ 0xff;
+			// 8 : Buttons
+			// 9 : Buttons
+			// 10 : R trig
+			// 11 : L trig
+			// 12 : Joy X axis
+			// 13 : Joy Y axis
+			// 14 : Joy X2 axis
+			// 15 : Joy Y2 axis
+			last_built_report[0][0] = tmp[12]-1;
+			last_built_report[0][1] = tmp[13]-1;
+			last_built_report[0][2] = tmp[8] ^ 0xff;
+			last_built_report[0][3] = tmp[9] ^ 0xff;
+			break;
+	}
 }
 
 static void dcUpdate(void)
