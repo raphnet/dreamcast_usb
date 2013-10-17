@@ -1,5 +1,5 @@
-/* Saturn to USB : Sega dc controllers to USB adapter
- * Copyright (C) 2011-2013 Raphaël Assénat
+/* Dreamcast to USB : Sega dc controllers to USB adapter
+ * Copyright (C) 2013 Raphaël Assénat
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -27,7 +27,7 @@
 #include "dc_pad.h"
 #include "maplebus.h"
 
-#define MAX_REPORT_SIZE			4
+#define MAX_REPORT_SIZE			6
 #define NUM_REPORTS				1
 
 // report matching the most recent bytes from the controller
@@ -36,7 +36,7 @@ static unsigned char last_built_report[NUM_REPORTS][MAX_REPORT_SIZE];
 // the most recently reported bytes
 static unsigned char last_sent_report[NUM_REPORTS][MAX_REPORT_SIZE];
 
-static char report_sizes[NUM_REPORTS] = { 4 };
+static char report_sizes[NUM_REPORTS] = { 6 };
 static Gamepad dcGamepad;
 
 static void dcUpdate(void);
@@ -44,8 +44,10 @@ static void dcUpdate(void);
 /*
  * [0] X
  * [1] Y
- * [2] Btn 0-7
- * [3] Btn 8-15 
+ * [2] Ltrig
+ * [3] Rtrig
+ * [4] Btn 0-7
+ * [5] Btn 8-15 
  */
 static const unsigned char dcPadReport[] PROGMEM = {
     0x05, 0x01,                    // USAGE_PAGE (Generic Desktop)
@@ -55,10 +57,12 @@ static const unsigned char dcPadReport[] PROGMEM = {
 	0xa1, 0x00,                    //   COLLECTION (Physical)
     0x09, 0x30,                    //     USAGE (X)
     0x09, 0x31,                    //     USAGE (Y)
+	0x09, 0x36,					   //	  USAGE (Slider)
+	0x09, 0x36,
     0x15, 0x00,                    //   LOGICAL_MINIMUM (0)
     0x26, 0xff, 0x00,              //     LOGICAL_MAXIMUM (255)
     0x75, 0x08,                    //   REPORT_SIZE (8)
-    0x95, 0x02,                    //   REPORT_COUNT (2)
+    0x95, 0x04,                    //   REPORT_COUNT (4)
     0x81, 0x02,                    //   INPUT (Data,Var,Abs)
 	0x05, 0x09,                    // USAGE_PAGE (Button)
     0x19, 0x01,                    //   USAGE_MINIMUM (Button 1)
@@ -105,68 +109,39 @@ static void dcInit(void)
 #define MAX_ERRORS 10
 
 #define STATE_GET_INFO	0
-#define STATE_WRITE_LCD	1
-#define STATE_READ_PAD	2
+#define STATE_READ_PAD	1
 
-#define MAPLE_CMD_RQ_DEV_INFO	1
-#define MAPLE_CMD_RESET_DEVICE	3
-#define MAPLE_CMD_GET_CONDITION	9
-#define MAPLE_CMD_BLOCK_WRITE	12
-
-#define MAPLE_ADDR_PORT(id)		((id)<<6)
-#define MAPLE_ADDR_PORTA		MAPLE_ADDR_PORT(0)
-#define MAPLE_ADDR_PORTB		MAPLE_ADDR_PORT(1)
-#define MAPLE_ADDR_PORTC		MAPLE_ADDR_PORT(2)
-#define MAPLE_ADDR_PORTD		MAPLE_ADDR_PORT(3)
-#define MAPLE_ADDR_MAIN			0x20
-#define MAPLE_ADDR_SUB(id)		((1)<<id) /* where id is 0 to 4 */
-
-#define MAPLE_DC_ADDR	0
-#define MAPLE_HEADER(cmd,dst_addr,src_addr,len)	( (((cmd)&0xfful)<<24) | (((dst_addr)&0xfful)<<16) | (((src_addr)&0xfful)<<8) | ((len)&0xff))
-
-static uint32_t request_device_info[1] = { MAPLE_HEADER(MAPLE_CMD_RQ_DEV_INFO, MAPLE_ADDR_MAIN | MAPLE_ADDR_PORTA, MAPLE_DC_ADDR, 0) };
-static uint32_t get_condition[2] = { 0x09200001, 0x00000001 };
-static uint32_t block_write_lcd[4] = { 0x0c300003, 0x004, 0,  0xf0f0f0f0 };
 
 static void dcReadPad(void)
 {
 	static unsigned char state = STATE_GET_INFO;
 	static unsigned char err_count = 0;
-	static unsigned char controller_address = 0;
 	unsigned char tmp[30];
 	int v;
 
 	switch (state)
 	{
 		case STATE_GET_INFO:
+		{
+			uint32_t request_device_info[1] = { MAPLE_HEADER(MAPLE_CMD_RQ_DEV_INFO, MAPLE_ADDR_MAIN | MAPLE_ADDR_PORTA, MAPLE_DC_ADDR, 0) };
 			maple_sendFrame(request_device_info, 1);
 			v = maple_receivePacket(tmp, 30);
-			_delay_ms(2);
+			// Too many data arrives and we stop listening before the controller stop transmitting. The delay
+			// here is to wait until the bus is idle again before continuing.
+			_delay_ms(2); 
 			if (v==-2) {
-				controller_address = tmp[1]; // sender address
-				state = STATE_WRITE_LCD;
+				state = STATE_READ_PAD;
 			}
-			break;
-
-		case STATE_WRITE_LCD:
-			{
-				int i;
-
-				for (i=0; i<5; i++)
-				{
-					uint32_t request_device_info1[1] = { MAPLE_HEADER(MAPLE_CMD_RQ_DEV_INFO, MAPLE_ADDR_PORTA | MAPLE_ADDR_SUB(i), MAPLE_DC_ADDR, 0) };
-
-					if (controller_address & (1<<i)) {
-						maple_sendFrame(request_device_info1, 1);
-						_delay_us(300);
-					}
-
-				}
-
-			}
-			break;
+		}
+		break;
 
 		case STATE_READ_PAD:
+		{
+			uint32_t get_condition[2] = { 
+				MAPLE_HEADER(MAPLE_CMD_GET_CONDITION, MAPLE_ADDR_MAIN | MAPLE_ADDR_PORTA, MAPLE_DC_ADDR, 1),
+				MAPLE_FUNC_CONTROLLER
+			};
+			
 			maple_sendFrame(get_condition, 2);
 			v = maple_receivePacket(tmp, 30);
 			if (v<=0) {
@@ -176,7 +151,9 @@ static void dcReadPad(void)
 				return;
 			}
 			err_count = 0;
-	
+			
+			if (v < 16)
+				return;	
 	
 			// 8 : Buttons
 			// 9 : Buttons
@@ -188,9 +165,12 @@ static void dcReadPad(void)
 			// 15 : Joy Y2 axis
 			last_built_report[0][0] = tmp[12]-1;
 			last_built_report[0][1] = tmp[13]-1;
-			last_built_report[0][2] = tmp[8] ^ 0xff;
-			last_built_report[0][3] = tmp[9] ^ 0xff;
-			break;
+			last_built_report[0][2] = tmp[10];
+			last_built_report[0][3] = tmp[11];
+			last_built_report[0][4] = tmp[8] ^ 0xff;
+			last_built_report[0][5] = tmp[9] ^ 0xff;
+		}
+		break;
 	}
 }
 
