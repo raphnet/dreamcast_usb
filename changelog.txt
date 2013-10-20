@@ -1,0 +1,6 @@
+2013-10-16 : Version 1.0
+
+Initial release:
+  - Standard controller support
+  - USB HID interface
+
