@@ -243,11 +243,6 @@ void maple_sendPacket(unsigned char *data, unsigned char len)
 	int i;
 	unsigned char b;
 
-	// SET PINS
-	// SET PINS
-	// SET PINS
-	// DLY
-
 	buf_reset();
 	for (i=0; i<len; i++) {
 		for (b=0x80; b; b>>=1)

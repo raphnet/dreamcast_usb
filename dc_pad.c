@@ -163,10 +163,10 @@ static void dcReadPad(void)
 			// 13 : Joy Y axis
 			// 14 : Joy X2 axis
 			// 15 : Joy Y2 axis
-			last_built_report[0][0] = tmp[12]-1;
-			last_built_report[0][1] = tmp[13]-1;
-			last_built_report[0][2] = tmp[10];
-			last_built_report[0][3] = tmp[11];
+			last_built_report[0][0] = tmp[12];
+			last_built_report[0][1] = tmp[13];
+			last_built_report[0][2] = tmp[10] / 2 + 0x80;
+			last_built_report[0][3] = tmp[11] / 2 + 0x80;
 			last_built_report[0][4] = tmp[8] ^ 0xff;
 			last_built_report[0][5] = tmp[9] ^ 0xff;
 		}

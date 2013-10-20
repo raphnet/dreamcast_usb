@@ -243,12 +243,6 @@ int main(void)
 	hardwareInit();
 
 	curGamepad = dcGetGamepad();
-
-	// A small delay is required before calling init. Otherwise,
-	// the shuttlemouse is not ready and the adapter runs
-	// in joystick mode.
-	_delay_ms(25); 
-
 	curGamepad->init();
 
 	// configure report descriptor according to
@@ -265,7 +259,6 @@ int main(void)
 	usbInit();
 	set_sleep_mode(SLEEP_MODE_IDLE);
 	sei();
-
 	
 	for(;;){	/* main event loop */
 		wdt_reset();
@@ -294,7 +287,6 @@ int main(void)
 			
 		if(must_report)
 		{
-			
 			for (i=0; i<curGamepad->num_reports; i++) {
 				int len;
 
