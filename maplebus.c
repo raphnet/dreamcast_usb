@@ -21,6 +21,11 @@
 #include <util/delay.h>
 #include "usbdrv.h"
 
+#undef NOLRC
+#undef TRACE_RX_START_END
+#undef TRACE_DECODED
+#undef TRACE_PIN1_BITS
+
 //
 //
 // PORTC0 : Pin 1
@@ -29,10 +34,14 @@
 
 void maple_init(void)
 {
-	DDRC &= ~0x03;
+	DDRC = 0xFC;
+	PORTC = 0x03;
 }
+#define transmitMode()	do { PORTC |= 0x03; DDRC |= 0x03; } while(0)
+#define inputMode() do { PORTC |= 0x03; DDRC &= ~0x03; } while(0)
 
-#define MAPLE_BUF_SIZE	640
+
+#define MAPLE_BUF_SIZE	641
 static unsigned char maplebuf[MAPLE_BUF_SIZE];
 static unsigned char buf_used;
 static unsigned char buf_phase;
@@ -47,6 +56,8 @@ static void buf_reset(void)
 
 static void buf_addBit(char value)
 {
+	// The values in maplebuf will be written
+	// directly to PORTC. Unused bits will be low.
 	if (buf_phase & 0x01) {
 		maplebuf[buf_used] = PIN_5;
 		if (value) {
@@ -72,6 +83,15 @@ static int maplebus_decode(unsigned char *data, unsigned int maxlen)
 	unsigned char last_fell;
 	int i;
 
+#ifdef TRACE_DECODED
+	PORTB |= 0x10;
+	PORTB &= ~0x10;
+	PORTB |= 0x10;
+	PORTB &= ~0x10;
+	PORTB |= 0x10;
+	PORTB &= ~0x10;
+#endif
+
 	// Look for the initial phase 1 (Pin 1 high, Pin 5 low). This
 	// is to skip what we got of the sync/start of frame sequence.
 	// 
@@ -90,7 +110,15 @@ static int maplebus_decode(unsigned char *data, unsigned int maxlen)
 	last_fell = 0;
 	for (; i<MAPLE_BUF_SIZE; i++) {
 		unsigned char fell;
-		unsigned char cur = maplebuf[i];
+		unsigned char cur = maplebuf[i] & 0x3;
+
+#ifdef TRACE_PIN1_BITS
+		if (cur & 1) {
+			PORTB |= 0x10;
+		} else {
+			PORTB &= ~0x10;
+		}
+#endif
 
 		if (cur == last) {
 			continue; // no change
@@ -106,8 +134,14 @@ static int maplebus_decode(unsigned char *data, unsigned int maxlen)
 
 		if (fell == last_fell) {
 			// two identical consecutive phases marks the end of the packet.
+#ifdef TRACE_DECODED
 				PORTB |= 0x10;
 				PORTB &= ~0x10;
+				PORTB |= 0x10;
+				PORTB &= ~0x10;
+				PORTB |= 0x10;
+				PORTB &= ~0x10;
+#endif
 			break;
 		}
 
@@ -122,8 +156,14 @@ static int maplebus_decode(unsigned char *data, unsigned int maxlen)
 
 			if (cur) {
 				data[dst_pos] |= dst_b;
+#ifdef TRACE_DECODED
+				PORTB |= 0x10;
+#endif
 			}
 			else {
+#ifdef TRACE_DECODED
+				PORTB &= ~0x10;
+#endif
 			}
 		}		
 		
@@ -138,6 +178,10 @@ static int maplebus_decode(unsigned char *data, unsigned int maxlen)
 		last = cur;
 	}
 	
+#ifdef TRACE_DECODED
+	PORTB &= ~0x10;
+#endif
+
 	return dst_pos;
 }
 
@@ -167,8 +211,8 @@ int maple_receivePacket(unsigned char *data, unsigned int maxlen)
 			"	push r31		\n"	// 2
 			"	clr %1			\n" // 1 (result=0, no timeout)
 		
-			"	sbi 0x5, 4		\n" // PB4
-			"	cbi 0x5, 4		\n"
+//			"	sbi 0x5, 4		\n" // PB4
+//			"	cbi 0x5, 4		\n"
 
 			// Loop until a change is detected.	
 			"	ldi r18, 255	\n"
@@ -188,16 +232,20 @@ int maple_receivePacket(unsigned char *data, unsigned int maxlen)
 			"	jmp done		\n"
 
 "start_rx:			\n"
+#ifdef TRACE_RX_START_END
 			"	sbi 0x5, 4		\n" // PB4
 			"	cbi 0x5, 4		\n"
+#endif
 
 			// We will loose the first bit(s), but
 			// it's only the start of frame.
 			#include "rxcode.asm"			
 
 "done:\n"
+#ifdef TRACE_RX_START_END
 			"	sbi 0x5, 4		\n" // PB4
 			"	cbi 0x5, 4		\n"
+#endif
 			"	pop r31			\n" // 2
 			"	pop r30			\n" // 2
 		: "=z"(tmp), "=r"(timeout)
@@ -211,16 +259,18 @@ int maple_receivePacket(unsigned char *data, unsigned int maxlen)
 	if (res<=0)
 		return res;
 
-	// A packet containts n groups of 4 bytes, plus 1 byte crc.
+	// A packet contains n groups of 4 bytes, plus 1 byte crc.
 	if (((res-1) & 0x3) != 0) {
 		return -2; // frame error
 	}
 
+#ifndef NOLRC
 	for (lrc=0, i=0; i<res; i++) {
 		lrc ^= data[i];
 	}
 	if (lrc)
 		return -2; // LRC error
+#endif
 
 	/* Reverse each group of 4 bytes */
 	for (i=0; i<(res-1); i+=4) {
@@ -252,8 +302,7 @@ void maple_sendPacket(unsigned char *data, unsigned char len)
 	}
 
 	// Output
-	PORTC |= 0x03;
-	DDRC |= 0x03;
+	transmitMode();
 
 	// DC controller pin 1 and pin 5
 #define SET_1		"	sbi %0, 0\n"
@@ -286,14 +335,14 @@ void maple_sendPacket(unsigned char *data, unsigned char len)
 "next_byte:\n"
 
 		"out %0, r20	\n" // 1  initial phase 1 state
+		"nop			\n" // 1
 		"out %0, r16	\n" // 1  data
 		"cbi %0, 0		\n" // 1  falling edge on pin 1
 		"ld r16, z+		\n" // 2  load phase 2 data
 		"nop			\n" // 1
-		"nop			\n" // 1
-		"nop			\n" // 1
 		
 		"out %0, r21	\n" // 1  initial phase 2 state
+		"nop			\n"
 		"out %0, r16	\n" // 1  data
 		"cbi %0, 1		\n" // 1  falling edge on pin 5
 		"ld r16, z+		\n" // 2
@@ -314,7 +363,7 @@ void maple_sendPacket(unsigned char *data, unsigned char len)
 	);
 
 	// back to input to receive the answer
-	DDRC &= ~0x03;
+	inputMode();
 }
 
 
