@@ -35,9 +35,11 @@
 #define MAPLE_HEADER(cmd,dst_addr,src_addr,len)	( (((cmd)&0xfful)<<24) | (((dst_addr)&0xfful)<<16) | (((src_addr)&0xfful)<<8) | ((len)&0xff))
 
 void maple_init(void);
-void maple_sendPacket(unsigned char *data, unsigned char len);
-void maple_sendFrame(uint32_t *words, unsigned char nwords);
 
-int maple_receivePacket(unsigned char *data, unsigned int maxlen);
+void maple_sendFrame(uint8_t cmd, uint8_t dst_addr, uint8_t src_addr, int data_len, uint8_t *data);
+void maple_sendFrame1W(uint8_t cmd, uint8_t dst_addr, uint8_t src_addr, uint32_t data);
+int maple_receiveFrame(uint8_t *data, unsigned int maxlen);
+
+void maple_sendRaw(uint8_t *data, unsigned char len);
 
 #endif // _maplebus_h__

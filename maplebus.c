@@ -19,7 +19,9 @@
  */
 #include <avr/io.h>
 #include <util/delay.h>
-#include "usbdrv.h"
+#include <string.h>
+
+#include "maplebus.h"
 
 #undef NOLRC
 #undef TRACE_RX_START_END
@@ -171,13 +173,19 @@ static int maplebus_decode(unsigned char *data, unsigned int maxlen)
 		if (!dst_b) {
 			dst_b = 0x80;
 			dst_pos++;
+			if (dst_pos >= maxlen) {
+#ifdef TRACE_DECODED
+				PORTB &= ~0x10;
+#endif
+				return -3;
+			}
 			data[dst_pos] = 0;
 		}
 
 		last_fell = fell;
 		last = cur;
 	}
-	
+
 #ifdef TRACE_DECODED
 	PORTB &= ~0x10;
 #endif
@@ -188,9 +196,9 @@ static int maplebus_decode(unsigned char *data, unsigned int maxlen)
 /**
  * \param data Destination buffer to store reply (payload + crc + eot)
  * \param maxlen The length of the destination buffer
- * \return -1 on timeout, -2 lrc/frame error, otherwise the number of bytes received
+ * \return -1 on timeout, -2 lrc/frame error, -3 too much data. Otherwise the number of bytes received
  */
-int maple_receivePacket(unsigned char *data, unsigned int maxlen)
+int maple_receiveFrame(unsigned char *data, unsigned int maxlen)
 {
 	unsigned char *tmp = maplebuf;
 	unsigned char lrc;
@@ -288,7 +296,7 @@ int maple_receivePacket(unsigned char *data, unsigned int maxlen)
 	return res-1; // remove lrc
 }
 
-void maple_sendPacket(unsigned char *data, unsigned char len)
+void maple_sendRaw(unsigned char *data, unsigned char len)
 {
 	int i;
 	unsigned char b;
@@ -310,7 +318,9 @@ void maple_sendPacket(unsigned char *data, unsigned char len)
 #define SET_5		"	sbi %0, 1\n"
 #define CLR_5		"	cbi %0, 1\n"
 #define DLY_8		"	nop\nnop\nnop\nnop\nnop\nnop\nnop\nnop\n"
+#define DLY_5		"	nop\nnop\nnop\nnop\nnop\n"
 #define DLY_4		"	nop\nnop\nnop\nnop\n"
+#define DLY_3		"	nop\nnop\nnop\n"
 
 	asm volatile(
 		"push r31\n"
@@ -323,26 +333,36 @@ void maple_sendPacket(unsigned char *data, unsigned char len)
 		"ld r16, z+		\n"
 
 		// Sync
-		SET_1 SET_5 DLY_8 CLR_1 DLY_8
+		SET_1 SET_5 DLY_8 
 
-		CLR_5 DLY_8 SET_5 DLY_8 CLR_5
-		DLY_8 SET_5 DLY_8 CLR_5 DLY_8
-		SET_5 DLY_8 CLR_5 DLY_8 SET_5
-		DLY_8 SET_1 CLR_5
+		CLR_1 DLY_4
+		CLR_5 DLY_3
+		
+		SET_5 DLY_3
+		CLR_5
+		DLY_3 
+		SET_5 
+		DLY_3 
+		CLR_5 
+		DLY_3
+		SET_5 
+		DLY_3 
+		CLR_5 DLY_3 SET_5
+		DLY_5 SET_1 CLR_5
 
 		// Pin 5 is low, Pin 1 is high. Ready for 1st phase
 		// Note: Coded for 16Mhz (8 cycles = 500ns)
 "next_byte:\n"
 
 		"out %0, r20	\n" // 1  initial phase 1 state
-		"nop			\n" // 1
+//		"nop			\n" // 1
 		"out %0, r16	\n" // 1  data
 		"cbi %0, 0		\n" // 1  falling edge on pin 1
 		"ld r16, z+		\n" // 2  load phase 2 data
-		"nop			\n" // 1
+//		"nop			\n" // 1
 		
 		"out %0, r21	\n" // 1  initial phase 2 state
-		"nop			\n"
+//		"nop			\n"
 		"out %0, r16	\n" // 1  data
 		"cbi %0, 1		\n" // 1  falling edge on pin 5
 		"ld r16, z+		\n" // 2
@@ -350,8 +370,20 @@ void maple_sendPacket(unsigned char *data, unsigned char len)
 		"brne next_byte	\n" // 2
 
 		// End of transmission
-		SET_5 DLY_4 CLR_5 DLY_4
-		CLR_1 DLY_8 SET_1 DLY_8 CLR_1 DLY_8 SET_1 DLY_4 SET_5
+		SET_1
+		DLY_4
+
+		SET_5 CLR_5 DLY_3
+
+		CLR_1 
+		DLY_3 
+		SET_1 
+		DLY_3 
+		CLR_1 
+		DLY_3 
+		SET_1 
+		DLY_3
+		SET_5
 
 		"pop r30		\n"
 		"pop r31		\n"
@@ -366,35 +398,37 @@ void maple_sendPacket(unsigned char *data, unsigned char len)
 	inputMode();
 }
 
-
-void maple_sendFrame(uint32_t *words, unsigned char nwords)
+void maple_sendFrame1W(uint8_t cmd, uint8_t dst_addr, uint8_t src_addr, uint32_t data)
 {
-	uint8_t data[nwords * 4 + 1];
-	uint8_t *d;
+	uint8_t tmp[4] = { data, data >> 8, data >> 16, data >> 24 };
+	maple_sendFrame(cmd, dst_addr, src_addr, 4, tmp);
+}
+
+/* 
+ * data is in bus order
+ */
+void maple_sendFrame(uint8_t cmd, uint8_t dst_addr, uint8_t src_addr, int data_len, uint8_t *data)
+{
+	uint8_t tmp[4 + data_len + 1]; // header, data and LRC
+	//uint8_t *d;
 	uint8_t lrc=0;
 	int i;
 
-	d = data;
-	for (i=0; i<nwords; i++) {
-		*d = words[i];
-		lrc ^= *d;
-		d++;
+	tmp[0] = data_len >> 2;
+	tmp[1] = src_addr;
+	tmp[2] = dst_addr;
+	tmp[3] = cmd;
 
-		*d = words[i] >> 8;
-		lrc ^= *d;
-		d++;
-
-		*d = words[i] >> 16;
-		lrc ^= *d;
-		d++;
-
-		*d = words[i] >> 24;
-		lrc ^= *d;
-		d++;
+	if (data_len) {
+		memcpy(tmp + 4, data, data_len);
 	}
-	data[nwords *4] = lrc;
 	
-	maple_sendPacket(data, nwords * 4 + 1);	
-}
+	for (lrc=0, i=0; i<data_len+4; i++) {
+		lrc ^= tmp[i];
+	}
 
+	tmp[i] = lrc;
+	
+	maple_sendRaw(tmp, sizeof(tmp));	
+}
 
