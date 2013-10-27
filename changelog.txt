@@ -1,3 +1,8 @@
+2013-10-27 : Version 1.1
+  - Fix incorrect end of frame sequence
+  - Improved maple bus api
+  - Added incomplete mouse support (wheel not supported)
+
 2013-10-16 : Version 1.0
 
 Initial release:
