@@ -245,6 +245,7 @@ int main(void)
 	curGamepad = dcGetGamepad();
 	curGamepad->init();
 
+reconnect:
 	// configure report descriptor according to
 	// the current gamepad
 	rt_usbHidReportDescriptor = (usbMsgPtr_t)curGamepad->reportDescriptor;
@@ -262,6 +263,10 @@ int main(void)
 	
 	for(;;){	/* main event loop */
 		wdt_reset();
+
+		if (curGamepad->descriptorsChanged && curGamepad->descriptorsChanged()) {
+			goto reconnect;
+		}
 
 		// this must be called at each 50 ms or less
 		usbPoll();

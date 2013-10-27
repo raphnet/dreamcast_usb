@@ -11,6 +11,8 @@ typedef struct {
 	int deviceDescriptorSize; // if 0, use default
 	void *deviceDescriptor; // must be in flash
 	
+	char (*descriptorsChanged)(void); // return true if descriptor above changed.
+
 	void (*init)(void);
 	void (*update)(void);
 
@@ -20,6 +22,7 @@ typedef struct {
 	 * \return The number of bytes written to buf.
 	 * */
 	char (*buildReport)(unsigned char *buf, unsigned char id);
+
 } Gamepad;
 
 #endif // _gamepad_h__

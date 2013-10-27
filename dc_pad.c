@@ -27,7 +27,10 @@
 #include "dc_pad.h"
 #include "maplebus.h"
 
+#define MOUSE_REPORT_SIZE		5
+#define CONTROLLER_REPORT_SIZE	6
 #define MAX_REPORT_SIZE			6
+
 #define NUM_REPORTS				1
 
 // report matching the most recent bytes from the controller
@@ -36,7 +39,8 @@ static unsigned char last_built_report[NUM_REPORTS][MAX_REPORT_SIZE];
 // the most recently reported bytes
 static unsigned char last_sent_report[NUM_REPORTS][MAX_REPORT_SIZE];
 
-static char report_sizes[NUM_REPORTS] = { 6 };
+static unsigned char cur_report_size = CONTROLLER_REPORT_SIZE;
+
 static Gamepad dcGamepad;
 
 static void dcUpdate(void);
@@ -76,6 +80,42 @@ static const unsigned char dcPadReport[] PROGMEM = {
     0xc0,                          // END_COLLECTION
 };
 
+/*
+ * [0] Mouse buttons
+ * [1] Mouse X
+ * [2] Mouse X
+ * [3] Mouse Y
+ * [4] Mouse Y
+ */
+static const unsigned char dcMouseReport[] PROGMEM = {
+	0x05, 0x01,                    // USAGE_PAGE (Generic Desktop)
+    0x09, 0x02,                    // USAGE (Mouse)
+    0xa1, 0x01,                    // COLLECTION (Application)
+    0x09, 0x01,                    //   USAGE (Pointer)
+    0xa1, 0x00,                    //   COLLECTION (Physical)
+    0x05, 0x09,                    //     USAGE_PAGE (Button)
+    0x19, 0x01,                    //     USAGE_MINIMUM (Button 1)
+    0x29, 0x04,                    //     USAGE_MAXIMUM (Button 4)
+    0x15, 0x00,                    //     LOGICAL_MINIMUM (0)
+    0x25, 0x01,                    //     LOGICAL_MAXIMUM (1)
+    0x95, 0x04,                    //     REPORT_COUNT (4)
+    0x75, 0x01,                    //     REPORT_SIZE (1)
+    0x81, 0x02,                    //     INPUT (Data,Var,Abs)
+    0x95, 0x01,                    //     REPORT_COUNT (1)
+    0x75, 0x04,                    //     REPORT_SIZE (4)
+    0x81, 0x03,                    //     INPUT (Cnst,Var,Abs)
+    0x05, 0x01,                    //     USAGE_PAGE (Generic Desktop)
+    0x09, 0x30,                    //     USAGE (X)
+    0x09, 0x31,                    //     USAGE (Y)
+    0x16, 0x01, 0xFE,                    //     LOGICAL_MINIMUM (-511)
+    0x26, 0xFF, 0x01,                    //     LOGICAL_MAXIMUM (511)
+    0x75, 0x10,                    //     REPORT_SIZE (16)
+    0x95, 0x02,                    //     REPORT_COUNT (2)
+    0x81, 0x06,                    //     INPUT (Data,Var,Rel)
+    0xc0,                          //   END_COLLECTION
+    0xc0,                          // END_COLLECTION
+};
+
 const unsigned char dcPadDevDesc[] PROGMEM = {    /* USB device descriptor */
     18,         /* sizeof(usbDescrDevice): length of descriptor in bytes */
     USBDESCR_DEVICE,    /* descriptor type */
@@ -93,68 +133,226 @@ const unsigned char dcPadDevDesc[] PROGMEM = {    /* USB device descriptor */
     1, /* number of configurations */
 };
 
+const unsigned char dcMouseDevDesc[] PROGMEM = {    /* USB device descriptor */
+    18,         /* sizeof(usbDescrDevice): length of descriptor in bytes */
+    USBDESCR_DEVICE,    /* descriptor type */
+    0x01, 0x01, /* USB version supported */
+    USB_CFG_DEVICE_CLASS,
+    USB_CFG_DEVICE_SUBCLASS,
+    0,          /* protocol */
+    8,          /* max packet size */
+	0x9B, 0x28,	// Vendor ID
+    0x09, 0x00, // Product ID
+	0x00, 0x01, // Version: Minor, Major
+	1, // Manufacturer String
+	2, // Product string
+	3, // Serial number string
+    1, /* number of configurations */
+};
+
+#define DEFAULT_FUNCTION	MAPLE_FUNC_CONTROLLER
+
+static uint16_t cur_connected_device = DEFAULT_FUNCTION;
+
+/* Used to report the change of function to the main loop
+ * which will then re-init. */
+static char dcDescriptorsChanged(void)
+{
+	static uint16_t previous_function = DEFAULT_FUNCTION;
+
+	if (cur_connected_device != previous_function) {
+		previous_function = cur_connected_device;
+		return 1;
+	}
+	return 0;
+}
+
+static void setConnectedDevice(uint16_t func)
+{
+	cur_connected_device = func;
+
+	switch (func)
+	{
+		case MAPLE_FUNC_CONTROLLER:
+			dcGamepad.reportDescriptor = (void*)dcPadReport;
+			dcGamepad.reportDescriptorSize = sizeof(dcPadReport);
+			dcGamepad.deviceDescriptor = (void*)dcPadDevDesc;
+			dcGamepad.deviceDescriptorSize = sizeof(dcPadDevDesc);
+			cur_report_size = CONTROLLER_REPORT_SIZE;
+			break;
+
+		case MAPLE_FUNC_MOUSE:
+			dcGamepad.reportDescriptor = (void*)dcMouseReport;
+			dcGamepad.reportDescriptorSize = sizeof(dcMouseReport);
+			dcGamepad.deviceDescriptor = (void*)dcMouseDevDesc;
+			dcGamepad.deviceDescriptorSize = sizeof(dcMouseDevDesc);
+			cur_report_size = MOUSE_REPORT_SIZE;
+			break;
+	}
+}
+
+
 
 static void dcInit(void)
 {
 	dcUpdate();
-
-	dcGamepad.reportDescriptor = (void*)dcPadReport;
-	dcGamepad.reportDescriptorSize = sizeof(dcPadReport);
-	
-	dcGamepad.deviceDescriptor = (void*)dcPadDevDesc;
-	dcGamepad.deviceDescriptorSize = sizeof(dcPadDevDesc);
-	
+	setConnectedDevice(DEFAULT_FUNCTION);	
 }
 
-#define MAX_ERRORS 10
+#define MAX_ERRORS 100
 
-#define STATE_GET_INFO	0
-#define STATE_READ_PAD	1
+#define STATE_RESET_DEVICE	0
+#define STATE_GET_INFO		1
+#define STATE_READ_PAD		2
+#define STATE_READ_MOUSE	3
+#define STATE_GET_EXT_INFO	4
 
 
 static void dcReadPad(void)
 {
-	static unsigned char state = STATE_GET_INFO;
+	static unsigned char state = STATE_RESET_DEVICE;
 	static unsigned char err_count = 0;
 	unsigned char tmp[30];
+	static unsigned char func_data[4];
 	int v;
 
 	switch (state)
 	{
+		case STATE_RESET_DEVICE:
+		{
+			maple_sendFrame(MAPLE_CMD_RESET_DEVICE,
+							MAPLE_ADDR_MAIN | MAPLE_ADDR_PORTA,
+							MAPLE_DC_ADDR, 0, NULL);
+			
+			state = STATE_GET_INFO;
+		}
+		break;
+
 		case STATE_GET_INFO:
 		{
-			uint32_t request_device_info[1] = { MAPLE_HEADER(MAPLE_CMD_RQ_DEV_INFO, MAPLE_ADDR_MAIN | MAPLE_ADDR_PORTA, MAPLE_DC_ADDR, 0) };
-			maple_sendFrame(request_device_info, 1);
-			v = maple_receivePacket(tmp, 30);
+			maple_sendFrame(MAPLE_CMD_RQ_DEV_INFO,
+							MAPLE_ADDR_MAIN | MAPLE_ADDR_PORTB,
+							MAPLE_DC_ADDR | MAPLE_ADDR_PORTB, 0, NULL);
+
+			v = maple_receiveFrame(tmp, 30);
+
 			// Too many data arrives and we stop listening before the controller stop transmitting. The delay
 			// here is to wait until the bus is idle again before continuing.
 			_delay_ms(2); 
 			if (v==-2) {
-				state = STATE_READ_PAD;
+				uint16_t func;
+
+				// 0-3 Header
+				// 4-7 Func
+				// ...
+				
+				func = tmp[4] | tmp[5]<<8;
+
+				if (func & MAPLE_FUNC_CONTROLLER) {
+					state = STATE_READ_PAD;
+					setConnectedDevice(MAPLE_FUNC_CONTROLLER);
+				} else if (func & MAPLE_FUNC_MOUSE) {
+					state = STATE_READ_MOUSE;
+					memcpy(func_data, tmp + 5, 4);
+					setConnectedDevice(MAPLE_FUNC_MOUSE);
+				}
 			}
+			
+			err_count = 0;
+		}
+		break;
+
+		case STATE_READ_MOUSE:
+		{
+			int16_t rel_x, rel_y;
+			uint8_t btns;
+			
+			maple_sendFrame1W(MAPLE_CMD_GET_CONDITION, 
+							MAPLE_ADDR_PORTB | MAPLE_ADDR_MAIN, 
+							MAPLE_ADDR_PORTB | MAPLE_DC_ADDR, 
+							MAPLE_FUNC_MOUSE);
+
+			v = maple_receiveFrame(tmp, 30);
+			
+			// The mouse sends too much data, it fills the receive buffer. Also,
+			// there is a pause in the transmission that does not help.
+			// The wheel drata and the the LRC are missed.
+			//
+			// As such, mouse support is incomplete and a hack.
+			//
+/*			if (v==-2) {
+				err_count++;
+				if (err_count > MAX_ERRORS) {
+					state = STATE_RESET_DEVICE;
+				}
+				return;
+			}
+			err_count = 0;
+*/	
+			// 8  : Buttons
+			// 9  : Buttons
+			// 10 : Buttons
+			// 11 : Buttons 
+			// 12 : Y axis MSB
+			// 13 : Y axis LSB
+			// 14 : X axis MSB
+			// 15 : X axis LSB
+			//
+			// 16 : Wheel MSB
+			// 17 : Wheel LSB
+			
+
+			// bit 0 : Middle button
+			// bit 1 : Right button
+			// bit 2 : Left button
+			// bit 3 : Thumb button
+			tmp[11] ^= 0xf;
+			btns = 0;
+
+			if (tmp[11] & 2) btns = 0x02; // DC Right -> USB btn 1
+			if (tmp[11] & 4) btns = 0x01; // DC Left  -> USB btn 0
+
+			// If the mouse has a physical middle button, let it work
+			// normally. Otherwise, use the thumb button.
+			if (func_data[2] & 0x01) {
+				if (tmp[11] & 1) btns = 0x04; // DC Middle -> USB btn 2
+				if (tmp[11] & 8) btns = 0x08; // DC Thumb -> USB btn 3
+			} else {
+				if (tmp[11] & 8) btns = 0x04; // DC Thumb -> btn 2
+			}
+
+			rel_x = (tmp[15] | tmp[14]<<8) - 0x200;
+			rel_y = (tmp[13] | tmp[12]<<8) - 0x200;
+
+			last_built_report[0][0] = btns;
+			last_built_report[0][1] = rel_x & 0xff;
+			last_built_report[0][2] = rel_x >> 8;
+			last_built_report[0][3] = rel_y & 0xff;
+			last_built_report[0][4] = rel_y >> 8;
 		}
 		break;
 
 		case STATE_READ_PAD:
 		{
-			uint32_t get_condition[2] = { 
-				MAPLE_HEADER(MAPLE_CMD_GET_CONDITION, MAPLE_ADDR_MAIN | MAPLE_ADDR_PORTA, MAPLE_DC_ADDR, 1),
-				MAPLE_FUNC_CONTROLLER
-			};
-			
-			maple_sendFrame(get_condition, 2);
-			v = maple_receivePacket(tmp, 30);
+			maple_sendFrame1W(MAPLE_CMD_GET_CONDITION, 
+							MAPLE_ADDR_PORTB | MAPLE_ADDR_MAIN, 
+							MAPLE_DC_ADDR | MAPLE_ADDR_PORTB,
+							MAPLE_FUNC_CONTROLLER);
+
+			v = maple_receiveFrame(tmp, 30);
+
 			if (v<=0) {
 				err_count++;
-				if (err_count > MAX_ERRORS)
+				if (err_count > MAX_ERRORS) {
 					state = STATE_GET_INFO;
+				}
 				return;
 			}
 			err_count = 0;
 			
 			if (v < 16)
 				return;	
-	
+
 			// 8 : Buttons
 			// 9 : Buttons
 			// 10 : R trig
@@ -185,20 +383,18 @@ static char dcBuildReport(unsigned char *reportBuffer, unsigned char report_id)
 
 	if (reportBuffer != NULL)
 	{
-		memcpy(reportBuffer, last_built_report[report_id], report_sizes[report_id]);
+		memcpy(reportBuffer, last_built_report[report_id], cur_report_size);
 	}
-	memcpy(last_sent_report[report_id], last_built_report[report_id], 
-			report_sizes[report_id]);	
+	memcpy(last_sent_report[report_id], last_built_report[report_id], cur_report_size);	
 
-	return report_sizes[report_id];
+	return cur_report_size;
 }
 
 static char dcChanged(unsigned char report_id)
 {
 	report_id = 0;
 
-	return memcmp(last_built_report[report_id], last_sent_report[report_id], 
-					report_sizes[report_id]);
+	return memcmp(last_built_report[report_id], last_sent_report[report_id], cur_report_size);
 }
 
 static Gamepad dcGamepad = {
@@ -206,7 +402,8 @@ static Gamepad dcGamepad = {
 	init: 				dcInit,
 	update: 			dcUpdate,
 	changed:			dcChanged,
-	buildReport:		dcBuildReport
+	buildReport:		dcBuildReport,
+	descriptorsChanged:	dcDescriptorsChanged,
 };
 
 Gamepad *dcGetGamepad(void)
