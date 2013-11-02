@@ -223,14 +223,18 @@ int maple_receiveFrame(unsigned char *data, unsigned int maxlen)
 //			"	cbi 0x5, 4		\n"
 
 			// Loop until a change is detected.	
+			"	ldi r19, 10		\n"
+			"wait_start_outer:	\n"
+			"	dec r19			\n"
+			"	breq timeout	\n"
 			"	ldi r18, 255	\n"
 			"	in r17, %2		\n"
-			"wait_start:		\n"
+			"wait_start_inner:		\n"
 			"	dec r18			\n"
-			"	breq timeout	\n"
+			"	breq wait_start_outer	\n"
 			"	in r16, %2		\n"
 			"	cp r16, r17		\n"
-			"	breq wait_start	\n"
+			"	breq wait_start_inner	\n"
 			"	rjmp start_rx	\n"
 
 "timeout:\n"
@@ -258,7 +262,7 @@ int maple_receiveFrame(unsigned char *data, unsigned int maxlen)
 			"	pop r30			\n" // 2
 		: "=z"(tmp), "=r"(timeout)
 		: "I" (_SFR_IO_ADDR(PINC))
-		: "r16","r17","r18") ;
+		: "r16","r17","r18","r19") ;
 
 	if (timeout)
 		return -1;
