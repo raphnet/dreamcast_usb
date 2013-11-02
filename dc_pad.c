@@ -29,7 +29,9 @@
 
 #define MOUSE_REPORT_SIZE		5
 #define CONTROLLER_REPORT_SIZE	6
-#define MAX_REPORT_SIZE			6
+#define KEYBOARD_REPORT_SIZE	7
+#define MAX_REPORT_SIZE			8
+
 
 #define NUM_REPORTS				1
 
@@ -116,6 +118,53 @@ static const unsigned char dcMouseReport[] PROGMEM = {
     0xc0,                          // END_COLLECTION
 };
 
+
+/* [0] Modifier byte
+ * [1] Reserved
+ * [2] Key array
+ * [3] Key array
+ * [4] Key array
+ * [5] Key array
+ * [6] Key array
+ * [7] Key array
+ *
+ * See Universal Serial Bus HID Tables - 10 Keyboard/Keypad Page (0x07)
+ * for key codes.
+ *
+ */
+static const unsigned char dcKeyboardReport[] PROGMEM = {
+	0x05, 0x01, // Usage page : Generic Desktop
+	0x09, 0x06, // Usage (Keyboard)
+	0xA1, 0x01, // Collection (Application)
+		0x05, 0x07, // Usage Page (Key Codes)
+		0x19, 0xE0, // Usage Minimum (224)
+		0x29, 0xE7, // Usage Maximum (231)
+		0x15, 0x00, // Logical Minimum (0)
+		0x25, 0x01, // Logical Maximum (1)
+		
+			// Modifier Byte
+		0x75, 0x01, // Report Size(1)
+		0x95, 0x08, // Report Count(8)
+		0x81, 0x02, // Input (Data, Variable, Absolute)
+
+			// Reserved Byte
+//		0x95, 0x01, // Report Count(1)
+//		0x75, 0x08, // Report Size(8)
+
+		0x95, 0x06, // Report Count(6)
+		0x75, 0x08, // Report Size(8)
+		0x15, 0x00, // Logical Minimum (0)
+		0x25, 0x8B, // Logical maximum (139)
+
+			// Key array
+//		0x05, 0x07, // Usage Page (key Codes)
+		0x19, 0x00, // Usage Minimum(0)
+		0x29, 0x8B, // Usage Maximum(139)
+		0x81, 0x00, // Input (Data, Array)
+
+    0xc0,                          // END_COLLECTION
+};
+
 const unsigned char dcPadDevDesc[] PROGMEM = {    /* USB device descriptor */
     18,         /* sizeof(usbDescrDevice): length of descriptor in bytes */
     USBDESCR_DEVICE,    /* descriptor type */
@@ -149,6 +198,24 @@ const unsigned char dcMouseDevDesc[] PROGMEM = {    /* USB device descriptor */
 	3, // Serial number string
     1, /* number of configurations */
 };
+
+const unsigned char dcKeyboardDevDesc[] PROGMEM = {    /* USB device descriptor */
+    18,         /* sizeof(usbDescrDevice): length of descriptor in bytes */
+    USBDESCR_DEVICE,    /* descriptor type */
+    0x01, 0x01, /* USB version supported */
+    USB_CFG_DEVICE_CLASS,
+    USB_CFG_DEVICE_SUBCLASS,
+    0,          /* protocol */
+    8,          /* max packet size */
+	0x9B, 0x28,	// Vendor ID
+    0x0A, 0x00, // Product ID
+	0x00, 0x01, // Version: Minor, Major
+	1, // Manufacturer String
+	2, // Product string
+	3, // Serial number string
+    1, /* number of configurations */
+};
+
 
 #define DEFAULT_FUNCTION	MAPLE_FUNC_CONTROLLER
 
@@ -188,6 +255,14 @@ static void setConnectedDevice(uint16_t func)
 			dcGamepad.deviceDescriptorSize = sizeof(dcMouseDevDesc);
 			cur_report_size = MOUSE_REPORT_SIZE;
 			break;
+		
+		case MAPLE_FUNC_KEYBOARD:
+			dcGamepad.reportDescriptor = (void*)dcKeyboardReport;
+			dcGamepad.reportDescriptorSize = sizeof(dcKeyboardReport);
+			dcGamepad.deviceDescriptor = (void*)dcKeyboardDevDesc;
+			dcGamepad.deviceDescriptorSize = sizeof(dcKeyboardDevDesc);
+			cur_report_size = KEYBOARD_REPORT_SIZE;
+			break;
 	}
 }
 
@@ -205,7 +280,7 @@ static void dcInit(void)
 #define STATE_GET_INFO		1
 #define STATE_READ_PAD		2
 #define STATE_READ_MOUSE	3
-#define STATE_GET_EXT_INFO	4
+#define STATE_READ_KEYBOARD	4
 
 
 static void dcReadPad(void)
@@ -255,6 +330,9 @@ static void dcReadPad(void)
 					state = STATE_READ_MOUSE;
 					memcpy(func_data, tmp + 5, 4);
 					setConnectedDevice(MAPLE_FUNC_MOUSE);
+				} else if (func & MAPLE_FUNC_KEYBOARD) {
+					state = STATE_READ_KEYBOARD;
+					setConnectedDevice(MAPLE_FUNC_KEYBOARD);
 				}
 			}
 			
@@ -367,6 +445,54 @@ static void dcReadPad(void)
 			last_built_report[0][3] = tmp[11] / 2 + 0x80;
 			last_built_report[0][4] = tmp[8] ^ 0xff;
 			last_built_report[0][5] = tmp[9] ^ 0xff;
+		}
+		break;
+
+		case STATE_READ_KEYBOARD:
+		{
+			maple_sendFrame1W(MAPLE_CMD_GET_CONDITION, 
+							MAPLE_ADDR_PORTB | MAPLE_ADDR_MAIN, 
+							MAPLE_DC_ADDR | MAPLE_ADDR_PORTB,
+							MAPLE_FUNC_KEYBOARD);
+
+			v = maple_receiveFrame(tmp, 30);
+
+			if (v<=0) {
+				err_count++;
+				if (err_count > MAX_ERRORS) {
+					state = STATE_GET_INFO;
+				}
+				return;
+			}
+			err_count = 0;
+			
+			if (v < 16)
+				return;	
+
+			// Dreamcast data
+			// 
+			// 8 : shift
+			// 9 : led
+			// 10 : key
+			// 11 : key
+			// 12 : key
+			// 13 : key
+			// 14 : key
+			// 15 : key
+			//
+			//
+			// The keycodes sent by the Dreamcast keyboards
+			// do not require any translation ; they are usable as-is.
+			//
+			// Compare http://mc.pp.se/dc/kbd.html and
+			// the USB HID Usage Table document table (10 Keyboard/Keypad Page (0x07))
+			//
+			last_built_report[0][0] = tmp[8]; // shift keys
+			last_built_report[0][1] = 0; // Reserved
+			last_built_report[0][2] = tmp[10];
+			last_built_report[0][3] = tmp[11];
+			last_built_report[0][4] = tmp[12];
+			last_built_report[0][5] = tmp[13];
 		}
 		break;
 	}
