@@ -1,3 +1,7 @@
+2013-11-02 : Version 1.1.1
+  - Longer timeout waiting for an answer. 
+  	(Fixes Performance P-20-007 dreamcast controller).
+
 2013-10-27 : Version 1.1
   - Fix incorrect end of frame sequence
   - Improved maple bus api
