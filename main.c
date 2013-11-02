@@ -150,10 +150,12 @@ static void hardwareInit(void)
 #if defined(AT168_COMPATIBLE)
 	TCCR2A= (1<<WGM21);
 	TCCR2B=(1<<CS22)|(1<<CS21)|(1<<CS20);
-	OCR2A=196;  // for 60 hz
+//	OCR2A=196;  // for 60 hz
+	OCR2A=50;  // for 60 hz
 #else
 	TCCR2 = (1<<WGM21)|(1<<CS22)|(1<<CS21)|(1<<CS20);
-	OCR2 = 196; // for 60 hz
+	//OCR2 = 196; // for 60 hz
+	OCR2 = 50; // for 60 hz
 #endif
 }
 
