@@ -1,3 +1,7 @@
+2013-11-03 : Version 1.2
+  - Dreamcast keyboard support (Tested: HKT-7600)
+  - Increased poll rate for better responsiveness
+
 2013-11-02 : Version 1.1.1
   - Longer timeout waiting for an answer. 
   	(Fixes Performance P-20-007 dreamcast controller).
