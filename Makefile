@@ -46,7 +46,7 @@ $(ELFFILE): $(OBJS)
 $(HEXFILE):	$(ELFFILE)
 	rm -f $(HEXFILE) 
 	avr-objcopy -j .text -j .data -O ihex $(ELFFILE) $(HEXFILE)
-	./checksize $(ELFFILE)
+	avr-size $(ELFFILE)
 
 
 flash: $(HEXFILE)
