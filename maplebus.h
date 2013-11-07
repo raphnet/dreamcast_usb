@@ -42,4 +42,6 @@ int maple_receiveFrame(uint8_t *data, unsigned int maxlen);
 
 void maple_sendRaw(uint8_t *data, unsigned char len);
 
+void maple_sendFrame_P(uint8_t cmd, uint8_t dst_addr, uint8_t src_addr, int data_len, PGM_P data);
+
 #endif // _maplebus_h__

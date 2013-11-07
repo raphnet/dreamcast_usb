@@ -18,6 +18,7 @@
  * The author may be contacted at raph@raphnet.net
  */
 #include <avr/io.h>
+#include <avr/pgmspace.h>
 #include <util/delay.h>
 #include <string.h>
 
@@ -26,7 +27,7 @@
 #undef NOLRC
 #undef TRACE_RX_START_END
 #undef TRACE_DECODED
-#undef TRACE_PIN1_BITS
+#define TRACE_PIN1_BITS
 
 //
 //
@@ -41,10 +42,10 @@ void maple_init(void)
 }
 #define transmitMode()	do { PORTC |= 0x03; DDRC |= 0x03; } while(0)
 #define inputMode() do { PORTC |= 0x03; DDRC &= ~0x03; } while(0)
-
+#define nop() asm volatile("nop\n");
 
 #define MAPLE_BUF_SIZE	641
-static unsigned char maplebuf[MAPLE_BUF_SIZE];
+volatile unsigned char maplebuf[MAPLE_BUF_SIZE];
 static unsigned char buf_used;
 static unsigned char buf_phase;
 
@@ -200,11 +201,10 @@ static int maplebus_decode(unsigned char *data, unsigned int maxlen)
  */
 int maple_receiveFrame(unsigned char *data, unsigned int maxlen)
 {
-	unsigned char *tmp = maplebuf;
 	unsigned char lrc;
 	unsigned char timeout;
 	int res, i;
-	
+
 	//
 	//  __       _   _   _
 	//    |_____| |_| |_| |_
@@ -217,8 +217,10 @@ int maple_receiveFrame(unsigned char *data, unsigned int maxlen)
 	asm volatile( 
 			"	push r30		\n" // 2
 			"	push r31		\n"	// 2
-			"	clr %1			\n" // 1 (result=0, no timeout)
-		
+			"	clr %0			\n" // 1 (result=0, no timeout)
+			
+			"	ldi r30, lo8(maplebuf)	\n"
+			"	ldi r31, hi8(maplebuf)	\n"
 //			"	sbi 0x5, 4		\n" // PB4
 //			"	cbi 0x5, 4		\n"
 
@@ -228,17 +230,17 @@ int maple_receiveFrame(unsigned char *data, unsigned int maxlen)
 			"	dec r19			\n"
 			"	breq timeout	\n"
 			"	ldi r18, 255	\n"
-			"	in r17, %2		\n"
+			"	in r17, %1		\n"
 			"wait_start_inner:		\n"
 			"	dec r18			\n"
 			"	breq wait_start_outer	\n"
-			"	in r16, %2		\n"
+			"	in r16, %1		\n"
 			"	cp r16, r17		\n"
 			"	breq wait_start_inner	\n"
 			"	rjmp start_rx	\n"
 
 "timeout:\n"
-			"	inc %1			\n" // 1 for timeout
+			"	inc %0			\n" // 1 for timeout
 			"	sbi 0x5, 4		\n" // PB4
 			"	cbi 0x5, 4		\n"
 			"	jmp done		\n"
@@ -260,7 +262,7 @@ int maple_receiveFrame(unsigned char *data, unsigned int maxlen)
 #endif
 			"	pop r31			\n" // 2
 			"	pop r30			\n" // 2
-		: "=z"(tmp), "=r"(timeout)
+		: "=r"(timeout)
 		: "I" (_SFR_IO_ADDR(PINC))
 		: "r16","r17","r18","r19") ;
 
@@ -298,6 +300,170 @@ int maple_receiveFrame(unsigned char *data, unsigned int maxlen)
 	}
 
 	return res-1; // remove lrc
+}
+
+static void maple_sendByte(uint8_t data)
+{{{
+	// Phase 1 initial state (pin 1 high, pin 5 low);
+	PORTC = 0x01;
+	_delay_us(1);
+	if (data & 0x80)
+		PORTC |= 0x02;
+	nop();
+	PORTC &= ~0x01;
+	_delay_us(1);
+	
+	// Phase 2 initial state (pin 1 low, pin 5 high;
+	PORTC = 0x02;
+	_delay_us(1);
+	if (data & 0x40)
+		PORTC |= 0x01;
+	nop();
+	PORTC &= ~0x02;
+	_delay_us(1);
+
+	// Phase 1 initial state (pin 1 high, pin 5 low);
+	PORTC = 0x01;
+	_delay_us(1);
+	if (data & 0x20)
+		PORTC |= 0x02;
+	nop();
+	PORTC &= ~0x01;
+	_delay_us(1);
+	
+	// Phase 2 initial state (pin 1 low, pin 5 high;
+	PORTC = 0x02;
+	_delay_us(1);
+	if (data & 0x10)
+		PORTC |= 0x01;
+	nop();
+	PORTC &= ~0x02;
+	_delay_us(1);
+
+	// Phase 1 initial state (pin 1 high, pin 5 low);
+	PORTC = 0x01;
+	_delay_us(1);
+	if (data & 0x08)
+		PORTC |= 0x02;
+	nop();
+	PORTC &= ~0x01;
+	_delay_us(1);
+	
+	// Phase 2 initial state (pin 1 low, pin 5 high;
+	PORTC = 0x02;
+	_delay_us(1);
+	if (data & 0x04)
+		PORTC |= 0x01;
+	nop();
+	PORTC &= ~0x02;
+	_delay_us(1);
+
+	// Phase 1 initial state (pin 1 high, pin 5 low);
+	PORTC = 0x01;
+	_delay_us(1);
+	if (data & 0x02)
+		PORTC |= 0x02;
+	nop();
+	PORTC &= ~0x01;
+	_delay_us(1);
+	
+	// Phase 2 initial state (pin 1 low, pin 5 high;
+	PORTC = 0x02;
+	_delay_us(1);
+	if (data & 0x01)
+		PORTC |= 0x01;
+	nop();
+	PORTC &= ~0x02;
+	_delay_us(1);
+}}}
+
+/* Slower C implementation for sending data from program memory. */
+void maple_sendRaw_P(unsigned char header_data[4], PGM_P data, unsigned char len)
+{
+	int i;
+	uint8_t tmp;
+	uint8_t lrc = 0;
+
+	transmitMode();
+
+	// Initially both lines are high
+	PORTC = 0x03;
+	// Pin 1 falls
+	PORTC = 0x02;
+	_delay_us(1);
+	
+	// Pin 5 falls
+	PORTC = 0x00;
+	_delay_us(1);
+
+	// 3 pulses on pin 5
+	PORTC = 0x02;
+	_delay_us(1);
+	PORTC = 0x00;
+	_delay_us(1);
+	PORTC = 0x02;
+	_delay_us(1);
+	PORTC = 0x00;
+	_delay_us(1);
+	PORTC = 0x02;
+	_delay_us(1);
+	PORTC = 0x00;
+	_delay_us(1);
+
+	PORTC = 0x02;
+	_delay_us(1);
+
+	PORTC = 0x03;
+	_delay_us(1);
+	
+	// Phase 1 initial state (pin 1 high, pin 5 low);
+	PORTC = 0x01;
+
+	for (i=0; i<4; i++) {
+		maple_sendByte(header_data[i]);
+		lrc ^= header_data[i];
+	}
+
+	for (i=0; i<len; i++) {
+		// Swap byte order in each word
+		tmp = pgm_read_byte(data + (i&0xfc) + (3-(i&0x03)));
+		maple_sendByte(tmp);
+		lrc ^= tmp;
+		if (i && (i%8==0)) {
+			_delay_us(30);
+		}
+	}
+	
+	maple_sendByte(lrc);
+
+	// End of frame initial state (Pin 1 high, pin 5 low)
+	PORTC = 0x01;
+	_delay_us(1);
+
+	// pulse on pin5
+	PORTC = 0x03;
+	_delay_us(1);
+	PORTC = 0x01;
+	_delay_us(1);
+
+	// pin 1 falls
+	PORTC = 0x00;
+	_delay_us(1);
+
+	// pin 1 pulse
+	PORTC = 0x01;
+	_delay_us(1);
+	PORTC = 0x00;
+	_delay_us(1);
+
+	// pin 1 rise
+	PORTC = 0x01;
+	_delay_us(1);
+
+	// pin 5 rise
+	PORTC = 0x03;
+
+	inputMode();
 }
 
 void maple_sendRaw(unsigned char *data, unsigned char len)
@@ -408,15 +574,28 @@ void maple_sendFrame1W(uint8_t cmd, uint8_t dst_addr, uint8_t src_addr, uint32_t
 	maple_sendFrame(cmd, dst_addr, src_addr, 4, tmp);
 }
 
+void maple_sendFrame_P(uint8_t cmd, uint8_t dst_addr, uint8_t src_addr, int data_len, PGM_P data)
+{
+	unsigned char header_data[4];
+
+	header_data[0] = data_len >> 2;
+	header_data[1] = src_addr;
+	header_data[2] = dst_addr;
+	header_data[3] = cmd;
+
+	// LRC is generated and sent by the function below.
+	maple_sendRaw_P(header_data, data, data_len);
+}
+
 /* 
  * data is in bus order
  */
 void maple_sendFrame(uint8_t cmd, uint8_t dst_addr, uint8_t src_addr, int data_len, uint8_t *data)
 {
-	uint8_t tmp[4 + data_len + 1]; // header, data and LRC
-	//uint8_t *d;
+	unsigned char tmp[4 + data_len + 1];
 	uint8_t lrc=0;
 	int i;
+	int len = 4 + data_len + 1;
 
 	tmp[0] = data_len >> 2;
 	tmp[1] = src_addr;
@@ -433,6 +612,6 @@ void maple_sendFrame(uint8_t cmd, uint8_t dst_addr, uint8_t src_addr, int data_l
 
 	tmp[i] = lrc;
 	
-	maple_sendRaw(tmp, sizeof(tmp));	
+	maple_sendRaw(tmp, len);	
 }
 
