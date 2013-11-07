@@ -19,8 +19,9 @@
  */
 #include <avr/io.h>
 #include <avr/interrupt.h>
-#include <util/delay.h>
 #include <avr/pgmspace.h>
+#include <util/delay.h>
+
 #include <string.h>
 #include "usbdrv.h"
 #include "gamepad.h"
@@ -281,18 +282,68 @@ static void dcInit(void)
 #define STATE_READ_PAD		2
 #define STATE_READ_MOUSE	3
 #define STATE_READ_KEYBOARD	4
+#define STATE_LCD_DETECT	5
+#define STATE_NULL			6
+static unsigned char state = STATE_RESET_DEVICE;
 
+const char lcd_data[200] PROGMEM = {
+	0x00, 0x00, 0x00, 0x04,
+	0x00, 0x00, 0x00, 0x00,
+#include "raphnet.c"				
+};
+
+static uint8_t lcd_addr = 0;
+
+static void updateLcd(void)
+{
+	unsigned char tmp[30];
+
+	if (lcd_addr) {
+		maple_sendFrame_P(MAPLE_CMD_BLOCK_WRITE,
+					lcd_addr,
+					MAPLE_DC_ADDR | MAPLE_ADDR_PORTB,
+					200, lcd_data);
+		maple_receiveFrame(tmp, 30);
+	}
+}
+
+static void pollSubs(void)
+{
+	int i, v;
+	unsigned char tmp[30];
+
+	for (i=0; i<5; i++) {
+		maple_sendFrame(MAPLE_CMD_RQ_DEV_INFO,
+						MAPLE_ADDR_SUB(i) | MAPLE_ADDR_PORTB,
+						MAPLE_DC_ADDR | MAPLE_ADDR_PORTB,
+						0, NULL);
+		v =  maple_receiveFrame(tmp, 30);
+		if (v==-2) {
+			_delay_ms(2);
+			uint16_t func = tmp[4] | tmp[5]<<8;
+
+			if (func & MAPLE_FUNC_LCD) {
+				lcd_addr = MAPLE_ADDR_SUB(i) | MAPLE_ADDR_PORTB;
+			}
+		}
+	}
+}
 
 static void dcReadPad(void)
 {
-	static unsigned char state = STATE_RESET_DEVICE;
 	static unsigned char err_count = 0;
 	unsigned char tmp[30];
 	static unsigned char func_data[4];
+	static int lcd_detect_count = 0;
 	int v;
 
 	switch (state)
 	{
+		case STATE_NULL:
+		{
+		}
+		break;
+
 		case STATE_RESET_DEVICE:
 		{
 			maple_sendFrame(MAPLE_CMD_RESET_DEVICE,
@@ -311,7 +362,7 @@ static void dcReadPad(void)
 
 			v = maple_receiveFrame(tmp, 30);
 
-			// Too many data arrives and we stop listening before the controller stop transmitting. The delay
+			// Too much data arrives and we stop listening before the controller stop transmitting. The delay
 			// here is to wait until the bus is idle again before continuing.
 			_delay_ms(2); 
 			if (v==-2) {
@@ -324,8 +375,9 @@ static void dcReadPad(void)
 				func = tmp[4] | tmp[5]<<8;
 
 				if (func & MAPLE_FUNC_CONTROLLER) {
-					state = STATE_READ_PAD;
 					setConnectedDevice(MAPLE_FUNC_CONTROLLER);
+					state = STATE_LCD_DETECT;
+					lcd_detect_count = 0;
 				} else if (func & MAPLE_FUNC_MOUSE) {
 					state = STATE_READ_MOUSE;
 					memcpy(func_data, tmp + 5, 4);
@@ -340,6 +392,31 @@ static void dcReadPad(void)
 		}
 		break;
 
+			// Try for 2 seconds to find the address of the LCD.
+			//
+			// After 2 seconds of trying, if found, send the
+			// image. 
+			//
+			// Sending the image right away after detection does not
+			// seem to work. This delay works around this.
+		case STATE_LCD_DETECT:
+		{
+			if (!lcd_addr) 
+			{
+				pollSubs();
+			}
+
+			if (lcd_detect_count > 120) {
+				if (lcd_addr) {
+					updateLcd();
+				}
+				state = STATE_READ_PAD;
+			}
+			
+			lcd_detect_count++;
+		}
+		break;	
+		
 		case STATE_READ_MOUSE:
 		{
 			int16_t rel_x, rel_y;
@@ -418,7 +495,7 @@ static void dcReadPad(void)
 							MAPLE_FUNC_CONTROLLER);
 
 			v = maple_receiveFrame(tmp, 30);
-
+			
 			if (v<=0) {
 				err_count++;
 				if (err_count > MAX_ERRORS) {
@@ -427,7 +504,7 @@ static void dcReadPad(void)
 				return;
 			}
 			err_count = 0;
-			
+
 			if (v < 16)
 				return;	
 
