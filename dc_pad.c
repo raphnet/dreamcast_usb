@@ -155,12 +155,12 @@ static const unsigned char dcKeyboardReport[] PROGMEM = {
 		0x95, 0x06, // Report Count(6)
 		0x75, 0x08, // Report Size(8)
 		0x15, 0x00, // Logical Minimum (0)
-		0x25, 0x8B, // Logical maximum (139)
+		0x26, 0xFF, 0x00, // Logical maximum (255)
 
 			// Key array
 //		0x05, 0x07, // Usage Page (key Codes)
 		0x19, 0x00, // Usage Minimum(0)
-		0x29, 0x8B, // Usage Maximum(139)
+		0x29, 0xFF, // Usage Maximum(255)
 		0x81, 0x00, // Input (Data, Array)
 
     0xc0,                          // END_COLLECTION
@@ -271,8 +271,13 @@ static void setConnectedDevice(uint16_t func)
 
 static void dcInit(void)
 {
+	setConnectedDevice(DEFAULT_FUNCTION);
+
+	/* Try to detect the exact peripheral before continuing. The allows
+	 * the adapter to enumerate as the correct device right away. */
 	dcUpdate();
-	setConnectedDevice(DEFAULT_FUNCTION);	
+	dcUpdate();
+	dcUpdate();
 }
 
 #define MAX_ERRORS 100
