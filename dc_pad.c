@@ -282,24 +282,32 @@ static void dcInit(void)
 
 #define MAX_ERRORS 100
 
-#define STATE_RESET_DEVICE	0
-#define STATE_GET_INFO		1
-#define STATE_READ_PAD		2
-#define STATE_READ_MOUSE	3
-#define STATE_READ_KEYBOARD	4
-#define STATE_LCD_DETECT	5
-#define STATE_NULL			6
+#define STATE_RESET_DEVICE		0
+#define STATE_GET_INFO			1
+#define STATE_READ_PAD			2
+#define STATE_READ_MOUSE		3
+#define STATE_READ_KEYBOARD		4
+#define STATE_LCD_DETECT		5
+#define STATE_BANNER_DISPLAY	6
+#define STATE_NULL				7
 static unsigned char state = STATE_RESET_DEVICE;
 
-const char lcd_data[200] PROGMEM = {
+const char lcd_data_raphnet[200] PROGMEM = {
 	0x00, 0x00, 0x00, 0x04,
 	0x00, 0x00, 0x00, 0x00,
 #include "raphnet.c"				
 };
 
+const char lcd_data_image[200] PROGMEM = {
+	0x00, 0x00, 0x00, 0x04,
+	0x00, 0x00, 0x00, 0x00,
+#include "blob.c"				
+};
+
+
 static uint8_t lcd_addr = 0;
 
-static void updateLcd(void)
+static void updateLcd(char id)
 {
 	unsigned char tmp[30];
 
@@ -307,7 +315,7 @@ static void updateLcd(void)
 		maple_sendFrame_P(MAPLE_CMD_BLOCK_WRITE,
 					lcd_addr,
 					MAPLE_DC_ADDR | MAPLE_ADDR_PORTB,
-					200, lcd_data);
+					200, id ? lcd_data_image : lcd_data_raphnet);
 		maple_receiveFrame(tmp, 30);
 	}
 }
@@ -406,21 +414,36 @@ static void dcReadPad(void)
 			// seem to work. This delay works around this.
 		case STATE_LCD_DETECT:
 		{
+			pollSubs();
 			if (!lcd_addr) 
 			{
-				pollSubs();
 			}
-
-			if (lcd_detect_count > 120) {
-				if (lcd_addr) {
-					updateLcd();
+			else {
+				if (lcd_detect_count > 220) {
+					updateLcd(0);
+					state = STATE_BANNER_DISPLAY;
+					lcd_detect_count = 0;
+					break;
 				}
-				state = STATE_READ_PAD;
 			}
 			
 			lcd_detect_count++;
+
+			if (lcd_detect_count > 400) {
+				state = STATE_READ_PAD;
+			}
 		}
 		break;	
+
+		case STATE_BANNER_DISPLAY:
+		{
+			lcd_detect_count++;
+			if (lcd_detect_count > 400) {
+				updateLcd(1);
+				state = STATE_READ_PAD;
+			}
+		}
+		break;
 		
 		case STATE_READ_MOUSE:
 		{
