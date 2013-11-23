@@ -82,10 +82,10 @@ uchar my_usbDescriptorConfiguration[] = {    /* USB configuration descriptor */
     9,          /* sizeof(usbDescrHID): length of descriptor in bytes */
     USBDESCR_HID,   /* descriptor type: HID */
     0x01, 0x01, /* BCD representation of HID version */
-    0x00,       /* target country code */
-    0x01,       /* number of HID Report (or other HID class) Descriptor infos to follow */
-    0x22,       /* descriptor type: report */
-    USB_CFG_HID_REPORT_DESCRIPTOR_LENGTH, 0,  /* total length of report descriptor */
+/* 22 */    15,       /* target country code : 15 = Japan */ 
+/* 23 */    0x01,       /* number of HID Report (or other HID class) Descriptor infos to follow */
+/* 24 */    0x22,       /* descriptor type: report */
+/* 25 */    USB_CFG_HID_REPORT_DESCRIPTOR_LENGTH, 0,  /* total length of report descriptor */
 //#endif
 #if USB_CFG_HAVE_INTRIN_ENDPOINT    /* endpoint descriptor for endpoint 1 */
     7,          /* sizeof(usbDescrEndpoint) */
