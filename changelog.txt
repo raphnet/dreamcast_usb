@@ -1,8 +1,8 @@
-2013-11-09 : Version 1.2
+2013-11-22 : Version 1.2
   - Dreamcast keyboard support (Tested: HKT-7600 and HKT-4000)
   - Increased poll rate for better responsiveness
   - Display an image on the LCD if present. 
-    (Static image. Not usable by emulators)
+    (Hardcoded image. Not usable by emulators)
 
 2013-11-02 : Version 1.1.1
   - Longer timeout waiting for an answer. 
